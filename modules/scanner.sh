@@ -616,7 +616,6 @@ check_OAUTH_MISC() {
         local headers
         headers=$(tz_curl_headers "$test_url")
         
-        # Проверяем, что это реальный HTTP-редирект (3xx статус)
         if echo "$headers" | grep -qiE '^HTTP/[0-9.]+ 3[0-9][0-9]'; then
             local location
             location=$(echo "$headers" | grep -iE '^location:' | awk '{print $2}' | tr -d '\r')
@@ -624,13 +623,14 @@ check_OAUTH_MISC() {
             # Строгая проверка: редирект должен вести НАПРЯМУЮ на наш хост
             if [[ "$location" == "http://${canary}"* ]] || [[ "$location" == "https://${canary}"* ]]; then
                 TZ_HIT_POC="$test_url"
-                TZ_HIT_PROOF="OAuth: ${ep} accepts arbitrary redirect_uri, redirects strictly to ${location}"
+                TZ_HIT_PROOF="OAuth: accepts arbitrary redirect_uri, redirects strictly to ${location}"
                 return 1
             fi
         fi
     done
     return 0
 }
+
 #############################################################################
 # 22. NoSQL Injection
 #############################################################################
@@ -850,9 +850,18 @@ check_GIT_EXPOSED() {
     local marker="$TZ_RESULTS_DIR/$domain/.git_checked_$(echo "$base" | md5sum | awk '{print $1}')"
     [ -f "$marker" ] && return 0
     touch "$marker"
+    
     local test_url="${base}/.git/config"
     local response
     response=$(tz_curl "$test_url")
+
+    # --- ФИКС SOFT 404: ИГНОРИРУЕМ HTML СТРАНИЦЫ ---
+    # Если сервер отдал HTML-код вместо сырого текста, это не .git/config
+    if echo "$response" | grep -qiE '<!DOCTYPE html>|<html'; then
+        return 0
+    fi
+    # -----------------------------------------------
+
     if echo "$response" | grep -qE '\[core\]|\[remote "'; then
         TZ_HIT_POC="$test_url"
         TZ_HIT_PROOF=".git/config contents accessible — repository may be fully downloadable"
@@ -860,6 +869,7 @@ check_GIT_EXPOSED() {
     fi
     return 0
 }
+
 
 #############################################################################
 # 31. .env File Exposed (runs once per base domain)
@@ -872,23 +882,42 @@ check_ENV_EXPOSED() {
     local marker="$TZ_RESULTS_DIR/$domain/.env_checked_$(echo "$base" | md5sum | awk '{print $1}')"
     [ -f "$marker" ] && return 0
     touch "$marker"
+    
     local env_url="${base}/.env"
     local response
     response=$(tz_curl "$env_url")
-    if echo "$response" | grep -qE '^(DB_PASSWORD|DB_HOST|APP_KEY|APP_SECRET|AWS_ACCESS_KEY|SECRET_KEY)='; then
-        TZ_HIT_POC="$env_url"
-        TZ_HIT_PROOF=".env exposed with credentials (DB_PASSWORD/APP_KEY/etc)"
-        return 1
+    
+    # --- ФИКС SOFT 404: ИГНОРИРУЕМ HTML СТРАНИЦЫ ДЛЯ .ENV ---
+    # Если сервер отдает HTML (например, заглушку), мы пропускаем проверку,
+    # чтобы не искать слово "password" в полях <input type="password">
+    if ! echo "$response" | grep -qiE '<!DOCTYPE html>|<html'; then
+        # Проверяем наличие типичных ключей .env файла
+        if echo "$response" | grep -qE '(DB_PASSWORD|DB_HOST|APP_KEY|APP_SECRET|AWS_ACCESS_KEY|SECRET_KEY)[[:space:]]*='; then
+            TZ_HIT_POC="$env_url"
+            TZ_HIT_PROOF=".env exposed with credentials (DB_PASSWORD/APP_KEY/etc)"
+            return 1
+        fi
     fi
+    # --------------------------------------------------------
+
     local backup_paths=("/config.php.bak" "/wp-config.php.bak" "/backup.sql" "/database.sql" "/config.yml.old" "/.env.backup")
     local path
     for path in "${backup_paths[@]}"; do
         local test_url="${base}${path}"
         local code
         code=$(tz_curl -o /dev/null -w "%{http_code}" "$test_url")
+        
         if [ "$code" = "200" ]; then
             local body
             body=$(tz_curl "$test_url")
+            
+            # --- ФИКС SOFT 404 ДЛЯ БЭКАПОВ ---
+            if echo "$body" | grep -qiE '<!DOCTYPE html>|<html'; then
+                continue
+            fi
+            # ---------------------------------
+
+            # Ищем SQL-дампы или конфигурационные константы в сыром файле
             if [ "${#body}" -gt 50 ] && echo "$body" | grep -qE '(password|DB_|CREATE TABLE|INSERT INTO|define\()'; then
                 TZ_HIT_POC="$test_url"
                 TZ_HIT_PROOF="Backup file exposed with sensitive content: $path"
@@ -896,9 +925,9 @@ check_ENV_EXPOSED() {
             fi
         fi
     done
+    
     return 0
 }
-
 #############################################################################
 # Asset-type filter — classifies URLs as "static asset" vs "dynamic".
 # Static assets (.js/.css/.png/etc.) only get header-based checks; injection
