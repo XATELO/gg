@@ -206,11 +206,11 @@ tz_main_menu() {
     echo
     printf '  %bTerminatorZ is a targeted Web Exploitation Framework that chains Recon%b\n'  "$NEON_CYAN" "$RESET"
     printf '  %busing subfinder for subdomain discovery and waybackurls for archived path%b\n' "$NEON_CYAN" "$RESET"
-    printf '  %bcollection, then fires 31 deterministic CVE and vulnerability checks%b\n'   "$NEON_CYAN" "$RESET"
+    printf '  %bcollection, then fires 32 deterministic CVE and vulnerability checks%b\n'   "$NEON_CYAN" "$RESET"
     printf '  %bagainst every live URL. Fast, passive-to-active, zero false-positive by design.%b\n' "$NEON_CYAN" "$RESET"
     echo
     printf '  %bSelect Attack Mode:%b\n\n' "${NEON_PINK}${BOLD}" "$RESET"
-    printf '    %b1%b  Full Scan          %bAll 31 CVE & Vulnerability Checks%b\n' \
+    printf '    %b1%b  Full Scan          %bAll 32 CVE & Vulnerability Checks%b\n' \
         "$NEON_GREEN"  "$RESET" "$DIM" "$RESET"
     printf '    %b2%b  Custom Scan        %bChoose Which CVEs To Scan%b\n' \
         "$NEON_CYAN"   "$RESET" "$DIM" "$RESET"

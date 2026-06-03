@@ -97,7 +97,7 @@ opening_sequence() {
     tz_neon_echo "[YOU ARE USING TerminatorZ v$VERSION] - CODED BY Chris 'SaintDruG' Abou-Chabké WITH LOVE FOR blackhatethicalhacking.com"
     tz_neon_echo "Educational Purposes Only - Authorised Testing Required!"
     sleep 1
-    tz_neon_echo "This Version 3.0 checks for a total of 31 vulnerabilities"
+    tz_neon_echo "This Version 3.0 checks for a total of 32 vulnerabilities"
     echo
 
     tz_neon_echo "CHECKING IF YOU ARE CONNECTED TO THE INTERNET!"
